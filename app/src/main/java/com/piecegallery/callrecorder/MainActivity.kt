@@ -2,6 +2,7 @@ package com.piecegallery.callrecorder
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -12,8 +13,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.Gravity
-import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
@@ -39,6 +38,7 @@ class MainActivity : Activity() {
     private lateinit var listBox: LinearLayout
     private lateinit var statusBtn: Button
     private lateinit var statusText: TextView
+    private val tabButtons = mutableListOf<Button>()
     private var filter = "ALL"
     private var player: MediaPlayer? = null
     private var playingPath: String? = null
@@ -85,22 +85,24 @@ class MainActivity : Activity() {
         statusBtn.setTextColor(BG)
         col.addView(statusBtn)
         statusBtn.setOnClickListener {
-            val p = prefs
-            val now = !p.getBoolean(CallDetectionService.KEY_AUTO, true)
-            p.edit().putBoolean(CallDetectionService.KEY_AUTO, now).apply()
+            val now = !prefs.getBoolean(CallDetectionService.KEY_AUTO, true)
+            prefs.edit().putBoolean(CallDetectionService.KEY_AUTO, now).apply()
             refreshStatus()
         }
 
         val btnRow = LinearLayout(this)
         btnRow.setPadding(0, dp(12), 0, 0)
         col.addView(btnRow)
-        listOf("Mic Test" to ::runMicTest, "Refresh" to ::refreshList).forEach { (label, fn) ->
-            val b = Button(this)
-            b.text = label
-            b.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) }
-            btnRow.addView(b)
-            b.setOnClickListener { fn() }
-        }
+        val micBtn = Button(this)
+        micBtn.text = "Mic Test"
+        micBtn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) }
+        btnRow.addView(micBtn)
+        micBtn.setOnClickListener { runMicTest() }
+        val refBtn = Button(this)
+        refBtn.text = "Refresh"
+        refBtn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        btnRow.addView(refBtn)
+        refBtn.setOnClickListener { refreshList() }
 
         val tabRow = LinearLayout(this)
         tabRow.setPadding(0, dp(16), 0, dp(8))
@@ -110,7 +112,7 @@ class MainActivity : Activity() {
             b.text = if (f == "ALL") "All" else f
             b.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(4) }
             b.setOnClickListener { filter = f; refreshList() }
-            b.tag = f
+            tabButtons.add(b)
             tabRow.addView(b)
         }
 
@@ -136,6 +138,9 @@ class MainActivity : Activity() {
     private fun refreshList() {
         listBox.removeAllViews()
         stopPlayback()
+        tabButtons.forEach { b ->
+            b.setTextColor(if ((b.tag ?: b.text) == filter || (b.text == "All" && filter == "ALL")) ACCENT else SUB)
+        }
         val files = dir.listFiles { f -> f.name.endsWith(".m4a") }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
         val shown = files.filter { f ->
@@ -145,10 +150,6 @@ class MainActivity : Activity() {
                 else -> true
             }
         }
-        (tabRowOf()).forEach { b ->
-            val active = (b.tag as String) == filter
-            b.setTextColor(if (active) ACCENT else SUB)
-        }
         if (shown.isEmpty()) {
             val empty = tv("No recordings yet.\nMake a call with Automatic Recording ON.", 14f, SUB)
             empty.setPadding(0, dp(24), 0, 0)
@@ -156,18 +157,6 @@ class MainActivity : Activity() {
             return
         }
         shown.forEach { f -> listBox.addView(recordingCard(f)) }
-    }
-
-    private fun tabRowOf(): List<Button> {
-        val out = mutableListOf<Button>()
-        for (i in 0 until listBox.parent.childCount) {
-            val v = listBox.parent.getChildAt(i)
-            if (v is LinearLayout) for (j in 0 until v.childCount) {
-                val c = v.getChildAt(j)
-                if (c is Button && c.tag is String) out.add(c)
-            }
-        }
-        return out
     }
 
     private fun recordingCard(f: File): View {
@@ -179,8 +168,7 @@ class MainActivity : Activity() {
 
         val silent = f.name.startsWith("Silent_")
         val incoming = f.name.contains("_Incoming")
-        val name = tv(if (silent) "Unknown Number (NO AUDIO CAPTURED)" else "Unknown Number", 16f, if (silent) RED else TEXT)
-        card.addView(name)
+        card.addView(tv(if (silent) "Unknown Number (NO AUDIO CAPTURED)" else "Unknown Number", 16f, if (silent) RED else TEXT))
         card.addView(tv(if (incoming) "Incoming Call" else "Outgoing Call", 13f, if (incoming) GREEN else BLUE))
         val d = SimpleDateFormat("MMM dd, yyyy · hh:mm a", Locale.US).format(Date(f.lastModified()))
         val kb = f.length() / 1024
@@ -189,14 +177,14 @@ class MainActivity : Activity() {
         val row = LinearLayout(this)
         row.setPadding(0, dp(8), 0, 0)
         card.addView(row)
-        val play = Button(this); play.text = "Play"; play.tag = f.absolutePath
+        val play = Button(this); play.text = "Play"
         val share = Button(this); share.text = "Share"
         val del = Button(this); del.text = "Delete"; del.setTextColor(RED)
         listOf(play, share, del).forEach { b ->
             b.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(4) }
             row.addView(b)
         }
-        play.setOnClickListener { v -> togglePlay(f, v as Button) }
+        play.setOnClickListener { togglePlay(f, play) }
         share.setOnClickListener { shareFile(f) }
         del.setOnClickListener { confirmDelete(f) }
         return card
@@ -249,15 +237,14 @@ class MainActivity : Activity() {
         val no = Button(this); no.text = "Cancel"
         listOf(yes, no).forEach { b -> b.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(4) }; r2.addView(b) }
         row.addView(r2)
-        val dlg = android.app.AlertDialog.Builder(this).setView(row).create()
-        dlg.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        val dlg = AlertDialog.Builder(this).setView(row).create()
         yes.setOnClickListener { f.delete(); dlg.dismiss(); refreshList() }
         no.setOnClickListener { dlg.dismiss() }
         dlg.show()
     }
 
     private fun runMicTest() {
-        Toast.makeText(this, "Speak for 5 seconds after the beep toast...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Speak for 5 seconds...", Toast.LENGTH_SHORT).show()
         try {
             val f = File(dir, "MicTest.m4a")
             val rec = MediaRecorder()
@@ -279,7 +266,6 @@ class MainActivity : Activity() {
                         val ok = max >= 600
                         val msg = if (ok) "MICROPHONE WORKING (level $max)" else "MICROPHONE NOT WORKING (level $max)"
                         Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
-                        if (ok) togglePlay(f, null)
                     }
                 }
             }
